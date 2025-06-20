@@ -89,7 +89,7 @@ def add_features(df):
     df['close_shift1'] = df['close'].shift(1)
     df['close_shift2'] = df['close'].shift(2)
     df['return'] = df['close'].pct_change().shift(-1)
-    df['target'] = np.where(df['return'] > 0.0002, 1, 0)  # Threshold for binary candle prediction
+    df['target'] = np.where(df['return'] > 0.0002, 1, 0)
     return df.dropna()
 
 def train_ensemble(df):
@@ -107,13 +107,18 @@ def train_ensemble(df):
     X = df_bal[features]
     y = df_bal['target']
 
+    # Clean NaN and Inf
+    if X.isnull().values.any() or np.isinf(X.values).any():
+        print("❌ Found NaN or Inf in features. Cleaning...")
+        X = X.replace([np.inf, -np.inf], np.nan).dropna()
+        y = y.loc[X.index]
+
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
     tscv = TimeSeriesSplit(n_splits=3)
     xgb = XGBClassifier(n_estimators=70, max_depth=3, learning_rate=0.05, use_label_encoder=False, eval_metric='logloss')
     cat = CatBoostClassifier(iterations=70, depth=3, learning_rate=0.05, verbose=0)
-
     ensemble = VotingClassifier(estimators=[('xgb', xgb), ('cat', cat)], voting='soft')
 
     for train_idx, test_idx in tscv.split(X_scaled):
