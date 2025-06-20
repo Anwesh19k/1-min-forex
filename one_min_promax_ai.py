@@ -12,7 +12,7 @@ API_KEYS =[
     '09c09d58ed5e4cf4afd9a9cac8e09b5d',
     'df00920c02c54a59a426948a47095543'
 ]
-SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD']
+SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP','XAU/USD',"BTC/USD"]
 api_index = 0
 
 def get_next_api_key():
