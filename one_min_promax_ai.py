@@ -16,7 +16,7 @@ def get_next_api_key():
 
 def fetch_data(symbol):
     try:
-        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval=1min&outputsize=300&apikey={get_next_api_key()}"
+        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval=1min&outputsize=400&apikey={get_next_api_key()}"
         data = requests.get(url).json()
         if "values" not in data:
             return pd.DataFrame()
@@ -29,8 +29,8 @@ def fetch_data(symbol):
 
 def compute_rsi(series, period=14):
     delta = series.diff()
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, -delta, 0)
+    gain = np.maximum(delta, 0)
+    loss = -np.minimum(delta, 0)
     avg_gain = pd.Series(gain).rolling(period).mean()
     avg_loss = pd.Series(loss).rolling(period).mean()
     rs = avg_gain / (avg_loss + 1e-6)
@@ -42,40 +42,48 @@ def add_features(df):
     df['rsi14'] = compute_rsi(df['close'])
     df['momentum'] = df['close'] - df['close'].shift(4)
     df['return'] = df['close'].shift(-2) / df['close'] - 1
+
+    # 3-class target with balanced thresholds
     df['target'] = np.select(
-        [df['return'] > 0.0002, df['return'] < -0.0002],
+        [df['return'] > 0.00015, df['return'] < -0.00015],
         [1, -1],
         default=0
     )
+
     df['future_label'] = df['target'].shift(-2)
     df = df.dropna()
     df = df[df['future_label'].isin([-1, 0, 1])]
     return df
 
 def balance_classes(df):
-    min_count = df['future_label'].value_counts().min()
-    df_bal = pd.concat([
+    class_counts = df['future_label'].value_counts()
+    if class_counts.min() < 5:
+        return None
+    min_count = class_counts.min()
+    return pd.concat([
         df[df['future_label'] == -1].sample(min_count, replace=True),
         df[df['future_label'] == 0].sample(min_count, replace=True),
         df[df['future_label'] == 1].sample(min_count, replace=True)
-    ])
-    return df_bal.sample(frac=1).reset_index(drop=True)
+    ]).sample(frac=1).reset_index(drop=True)
 
 def train_model(df):
     features = ['ma5', 'ema10', 'rsi14', 'momentum']
     df_bal = balance_classes(df)
+    if df_bal is None:
+        return None, None
     X = df_bal[features]
     y = df_bal['future_label']
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     model = XGBClassifier(objective='multi:softprob', num_class=3,
-                          n_estimators=60, max_depth=3, learning_rate=0.07,
-                          use_label_encoder=False, eval_metric='mlogloss')
+                          n_estimators=80, max_depth=4, learning_rate=0.05, use_label_encoder=False, eval_metric='mlogloss')
     model.fit(X_scaled, y)
     return model, scaler
 
 def predict(df, model, scaler):
     features = ['ma5', 'ema10', 'rsi14', 'momentum']
+    if model is None or scaler is None or df.shape[0] < 5:
+        return None
     X_pred = df[features].iloc[[-2]]
     X_scaled = scaler.transform(X_pred)
     probs = model.predict_proba(X_scaled)[0]
@@ -93,11 +101,12 @@ def run_signal_engine():
     results = []
     for symbol in SYMBOLS:
         df = fetch_data(symbol)
-        if df.empty: continue
+        if df.empty or len(df) < 100: continue
         df = add_features(df)
         if df['future_label'].nunique() < 2: continue
         model, scaler = train_model(df)
-        signal = predict(df, model, scaler)
-        signal['Symbol'] = symbol
-        results.append(signal)
+        result = predict(df, model, scaler)
+        if result:
+            result['Symbol'] = symbol
+            results.append(result)
     return pd.DataFrame(results)
