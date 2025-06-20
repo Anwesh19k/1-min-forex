@@ -139,18 +139,8 @@ def predict(df, model, scaler, symbol):
     X_scaled = scaler.transform(X_pred)
     proba = model.predict_proba(X_scaled)[0]
 
-    if proba[1] < 0.6:
-        return {
-            "Symbol": symbol,
-            "Signal": "NO TRADE ❌",
-            "Prob BUY": round(proba[1], 2),
-            "RSI": round(df.iloc[-2]['rsi14'], 1),
-            "Confidence": "Low",
-            "Price x100": round(df.iloc[-2]['close'] * MULTIPLIER, 2),
-            "Correct": "-"
-        }
-
-    signal = "BUY 📈"
+    signal = "BUY 📈" if proba[1] > 0.5 else "SELL 🔻"
+    confidence = "✅ High" if proba[1] >= 0.6 else "⚠️ Low"
     target = df.iloc[-2]['target']
     predicted = 1 if proba[1] > 0.5 else 0
     correct = "✅" if predicted == target else "❌"
@@ -160,7 +150,7 @@ def predict(df, model, scaler, symbol):
         "Signal": signal,
         "Prob BUY": round(proba[1], 2),
         "RSI": round(df.iloc[-2]['rsi14'], 1),
-        "Confidence": "High",
+        "Confidence": confidence,
         "Price x100": round(df.iloc[-2]['close'] * MULTIPLIER, 2),
         "Correct": correct
     }
@@ -192,5 +182,3 @@ def run_signal_engine():
 # ✅ Streamlit Integration
 if 'df_pro_max' not in st.session_state:
     st.session_state['df_pro_max'] = run_signal_engine()
-
-
