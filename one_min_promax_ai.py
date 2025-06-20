@@ -2,8 +2,6 @@ import pandas as pd
 import numpy as np
 import requests
 from datetime import datetime
-from sklearn.metrics import accuracy_score
-from sklearn.model_selection import TimeSeriesSplit
 from sklearn.utils import resample
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import VotingClassifier
@@ -15,7 +13,6 @@ API_KEYS = [
     '54a7479bdf2040d3a35d6b3ae6457f9d',
     'd162b35754ca4c54a13ebe7abecab4e0',
     'a7266b2503fd497496d47527a7e63b5d',
-    '54a7479bdf2040d3a35d6b3ae6457f9d',
     '09c09d58ed5e4cf4afd9a9cac8e09b5d',
     'df00920c02c54a59a426948a47095543'
 ]
@@ -88,8 +85,8 @@ def add_features(df):
     df['high_low'] = df['high'] - df['low']
     df['close_shift1'] = df['close'].shift(1)
     df['close_shift2'] = df['close'].shift(2)
-    df['return'] = df['close'].pct_change().shift(-1)
-    df['target'] = np.where(df['return'] > 0.0002, 1, 0)
+    df['return'] = df['close'].shift(-2) / df['close'] - 1
+    df['target'] = np.where(df['return'] > 0.0015, 1, 0)
     return df.dropna()
 
 def train_ensemble(df):
@@ -99,6 +96,11 @@ def train_ensemble(df):
     df_1 = df[df['target'] == 1]
     df_0 = df[df['target'] == 0]
     min_len = min(len(df_1), len(df_0))
+
+    if min_len < 10:
+        print("⚠️ Skipping training due to insufficient data.")
+        return None, None
+
     df_bal = pd.concat([
         resample(df_1, n_samples=min_len, replace=True, random_state=42),
         resample(df_0, n_samples=min_len, replace=True, random_state=42)
@@ -107,7 +109,6 @@ def train_ensemble(df):
     X = df_bal[features]
     y = df_bal['target']
 
-    # Clean NaN and Inf
     if X.isnull().values.any() or np.isinf(X.values).any():
         print("❌ Found NaN or Inf in features. Cleaning...")
         X = X.replace([np.inf, -np.inf], np.nan).dropna()
@@ -116,50 +117,63 @@ def train_ensemble(df):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    tscv = TimeSeriesSplit(n_splits=3)
     xgb = XGBClassifier(n_estimators=70, max_depth=3, learning_rate=0.05, use_label_encoder=False, eval_metric='logloss')
     cat = CatBoostClassifier(iterations=70, depth=3, learning_rate=0.05, verbose=0)
     ensemble = VotingClassifier(estimators=[('xgb', xgb), ('cat', cat)], voting='soft')
-
-    for train_idx, test_idx in tscv.split(X_scaled):
-        X_train, X_test = X_scaled[train_idx], X_scaled[test_idx]
-        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
-        ensemble.fit(X_train, y_train)
-
     ensemble.fit(X_scaled, y)
+
     return ensemble, scaler
 
 def predict(df, model, scaler, symbol):
     features = ['ma5', 'ma10', 'ema10', 'rsi14', 'momentum', 'macd', 'adx',
                 'bb_upper', 'bb_lower', 'volatility', 'open_close', 'high_low',
                 'close_shift1', 'close_shift2']
+
+    if model is None or scaler is None:
+        return {
+            "Symbol": symbol,
+            "Signal": "NO MODEL ❌",
+            "Prob BUY": "-",
+            "RSI": "-",
+            "Confidence": "Low",
+            "Price x100": "-",
+            "Correct": "-"
+        }
+
     X_pred = df[features].iloc[[-2]]
     X_scaled = scaler.transform(X_pred)
     proba = model.predict_proba(X_scaled)[0]
-    signal = "BUY 📈" if proba[1] > 0.5 else "SELL 🔉"
 
-    last = df.iloc[-2]
-    confidence = sum([
-        last['ema10'] > last['ma10'],
-        last['momentum'] > 0,
-        last['macd'] > 0,
-        last['adx'] > 20,
-        last['close'] < last['bb_lower'] if signal == "BUY 📈" else last['close'] > last['bb_upper']
-    ])
-    conf_label = "✅ Strong" if confidence >= 4 else "⚠️ Weak"
-    price = round(last['close'], 5)
+    if proba[1] < 0.8:
+        return {
+            "Symbol": symbol,
+            "Signal": "NO TRADE ❌",
+            "Prob BUY": round(proba[1], 2),
+            "RSI": round(df.iloc[-2]['rsi14'], 1),
+            "Confidence": "Low",
+            "Price x100": round(df.iloc[-2]['close'] * MULTIPLIER, 2),
+            "Correct": "-"
+        }
+
+    signal = "BUY 📈"
+    target = df.iloc[-2]['target']
+    predicted = 1 if proba[1] > 0.5 else 0
+    correct = "✅" if predicted == target else "❌"
 
     return {
         "Symbol": symbol,
         "Signal": signal,
         "Prob BUY": round(proba[1], 2),
-        "RSI": round(last['rsi14'], 1),
-        "Confidence": conf_label,
-        "Price x100": round(price * MULTIPLIER, 2)
+        "RSI": round(df.iloc[-2]['rsi14'], 1),
+        "Confidence": "High",
+        "Price x100": round(df.iloc[-2]['close'] * MULTIPLIER, 2),
+        "Correct": correct
     }
 
 def run_signal_engine():
     results = []
+    wins, total = 0, 0
+
     for symbol in SYMBOLS:
         print(f"📊 Analyzing {symbol}...")
         df = fetch_data(symbol)
@@ -168,9 +182,18 @@ def run_signal_engine():
         df = add_features(df)
         model, scaler = train_ensemble(df)
         result = predict(df, model, scaler, symbol)
+
+        if result['Correct'] != "-" and result['Correct'] != "NO MODEL ❌":
+            total += 1
+            if result['Correct'] == "✅":
+                wins += 1
+
         results.append(result)
+
+    print(f"\n🎯 Win Accuracy: {wins}/{total} = {round((wins/total)*100, 2)}%" if total > 0 else "No trades taken.")
     return pd.DataFrame(results)
 
-if __name__ == "__main__":
-    signals = run_signal_engine()
-    print(signals.to_markdown(index=False) if not signals.empty else "❌ No signals generated.")
+# Optional: For Streamlit dashboard integration
+import streamlit as st
+if 'df_pro_max' not in st.session_state:
+    st.session_state['df_pro_max'] = run_signal_engine()
