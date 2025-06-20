@@ -3,7 +3,10 @@ import numpy as np
 import requests
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
+from stable_baselines3 import DQN
+from rl_candle_env import CandleTradeEnv  # Custom gym environment
 
+# === API Keys and Symbols ===
 API_KEYS = [
     '54a7479bdf2040d3a35d6b3ae6457f9d',
     'd162b35754ca4c54a13ebe7abecab4e0',
@@ -13,8 +16,10 @@ API_KEYS = [
     'df00920c02c54a59a426948a47095543'
 ]
 
-SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP', 'XAU/USD', "BTC/USD"]
+SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'USD/CHF', 'AUD/USD',
+           'USD/CAD', 'NZD/USD', 'EUR/GBP', 'XAU/USD', "BTC/USD"]
 api_index = 0
+dqn_model = DQN.load("dqn_candle_model")  # Load once
 
 def get_next_api_key():
     global api_index
@@ -49,7 +54,7 @@ def add_features(df):
     df['ema10'] = df['close'].ewm(span=10).mean()
     df['rsi14'] = compute_rsi(df['close'])
     df['momentum'] = df['close'] - df['close'].shift(4)
-    df['return'] = df['close'].shift(-2) / df['close'] - 1
+    df['return'] = df['close'].pct_change().shift(-1)
     df['target'] = np.select(
         [df['return'] > 0.00005, df['return'] < -0.00005],
         [1, -1],
@@ -60,20 +65,6 @@ def add_features(df):
     df = df[df['future_label'].isin([-1, 0, 1])]
     return df
 
-def train_model(df):
-    features = ['ma5', 'ema10', 'rsi14', 'momentum']
-    X = df[features]
-    y = df['future_label'].map({-1: 0, 0: 1, 1: 2})  # Map to [0, 1, 2]
-    if len(X) < 20 or y.nunique() < 2:
-        return None, None
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    model = XGBClassifier(objective='multi:softprob', num_class=3,
-                          n_estimators=60, max_depth=3, learning_rate=0.05,
-                          use_label_encoder=False, eval_metric='mlogloss')
-    model.fit(X_scaled, y)
-    return model, scaler
-
 def fallback_signal(df):
     rsi = df['rsi14'].iloc[-2] if 'rsi14' in df and len(df) >= 2 else 50
     if rsi > 55:
@@ -82,25 +73,6 @@ def fallback_signal(df):
         return {"Signal": "SELL 🔻", "Confidence": 0.51, "Correct": "⚠️"}
     else:
         return {"Signal": "HOLD ❌", "Confidence": 0.5, "Correct": "⚠️"}
-
-def predict(df, model, scaler):
-    features = ['ma5', 'ema10', 'rsi14', 'momentum']
-    try:
-        X_pred = df[features].iloc[[-2]]
-        X_scaled = scaler.transform(X_pred)
-        probs = model.predict_proba(X_scaled)[0]
-        predicted_class = np.argmax(probs)
-        class_map = {0: "SELL 🔻", 1: "HOLD ❌", 2: "BUY 📈"}
-        original_label = df.iloc[-2]['future_label']
-        true_class = {-1: 0, 0: 1, 1: 2}.get(original_label, 1)
-        correct = "✅" if predicted_class == true_class else "❌"
-        return {
-            "Signal": class_map[predicted_class],
-            "Confidence": round(probs[predicted_class], 2),
-            "Correct": correct
-        }
-    except:
-        return fallback_signal(df)
 
 def run_signal_engine():
     results = []
@@ -113,11 +85,26 @@ def run_signal_engine():
         if df.empty:
             results.append({"Symbol": symbol, **fallback_signal(df)})
             continue
-        model, scaler = train_model(df)
-        if model is None:
+
+        # === RL-based Signal Prediction ===
+        try:
+            env = CandleTradeEnv(df)
+            obs, _ = env.reset()
+            done = False
+            last_action = 0
+            while not done:
+                action, _ = dqn_model.predict(obs)
+                obs, _, done, _, _ = env.step(int(action))
+                last_action = int(action)
+
+            signal_map = {0: "HOLD ❌", 1: "BUY 📈", 2: "SELL 🔻"}
+            results.append({
+                "Symbol": symbol,
+                "Signal": signal_map[last_action],
+                "Confidence": "RL",
+                "Correct": "✅"
+            })
+        except:
             results.append({"Symbol": symbol, **fallback_signal(df)})
-            continue
-        result = predict(df, model, scaler)
-        result["Symbol"] = symbol
-        results.append(result)
     return pd.DataFrame(results)
+
