@@ -4,7 +4,14 @@ import requests
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
-API_KEYS = ['your_api_key1', 'your_api_key2', 'your_api_key3']
+API_KEYS =[
+    '54a7479bdf2040d3a35d6b3ae6457f9d',
+    'd162b35754ca4c54a13ebe7abecab4e0',
+    'a7266b2503fd497496d47527a7e63b5d',
+    '54a7479bdf2040d3a35d6b3ae6457f9d',
+    '09c09d58ed5e4cf4afd9a9cac8e09b5d',
+    'df00920c02c54a59a426948a47095543'
+]
 SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD']
 api_index = 0
 
