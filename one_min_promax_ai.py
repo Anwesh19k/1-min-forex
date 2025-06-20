@@ -8,7 +8,6 @@ from xgboost import XGBClassifier
 from catboost import CatBoostClassifier
 import streamlit as st
 
-# === CONFIG ===
 API_KEYS = [
     '54a7479bdf2040d3a35d6b3ae6457f9d',
     'd162b35754ca4c54a13ebe7abecab4e0',
@@ -85,26 +84,30 @@ def add_features(df, symbol):
     df['high_low'] = df['high'] - df['low']
     df['close_shift1'] = df['close'].shift(1)
     df['close_shift2'] = df['close'].shift(2)
+
     df['return'] = df['close'].shift(-2) / df['close'] - 1
-    df['target'] = np.where(df['return'] > 0.0002, 1, 0)
-    print(f"🔎 {symbol} - Return stats:\n{df['return'].describe()}")
-    print(f"📊 {symbol} - Target=1 count: {df['target'].sum()} out of {len(df)}")
+
+    # 3-Class Label: Buy, Sell, Hold
+    df['target'] = np.select(
+        [df['return'] > 0.0002, df['return'] < -0.0002],
+        [1, -1],
+        default=0
+    )
+
+    print(f"📊 {symbol} Target Distribution:\n{df['target'].value_counts()}")
     return df.dropna()
 
 def train_ensemble(df, symbol):
     features = ['ma5', 'ma10', 'ema10', 'rsi14', 'momentum', 'macd', 'adx',
                 'bb_upper', 'bb_lower', 'volatility', 'open_close', 'high_low',
                 'close_shift1', 'close_shift2']
-    df_1 = df[df['target'] == 1]
-    df_0 = df[df['target'] == 0]
 
-    if len(df_1) == 0 or len(df_0) == 0:
-        print(f"⚠️ {symbol} - Cannot train: only one class present.")
+    if df['target'].nunique() < 2:
+        print(f"⚠️ {symbol} - Not enough class variety.")
         return None, None
 
-    df_bal = pd.concat([df_1, df_0]).sample(frac=1).reset_index(drop=True)
-    X = df_bal[features]
-    y = df_bal['target']
+    X = df[features]
+    y = df['target']
 
     X = X.replace([np.inf, -np.inf], np.nan).dropna()
     y = y.loc[X.index]
@@ -112,8 +115,11 @@ def train_ensemble(df, symbol):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    xgb = XGBClassifier(n_estimators=70, max_depth=3, learning_rate=0.05, use_label_encoder=False, eval_metric='logloss')
-    cat = CatBoostClassifier(iterations=70, depth=3, learning_rate=0.05, verbose=0)
+    xgb = XGBClassifier(objective='multi:softprob', num_class=3,
+                        n_estimators=70, max_depth=3, learning_rate=0.05, use_label_encoder=False, eval_metric='mlogloss')
+
+    cat = CatBoostClassifier(iterations=70, depth=3, learning_rate=0.05, verbose=0, loss_function='MultiClass')
+
     ensemble = VotingClassifier(estimators=[('xgb', xgb), ('cat', cat)], voting='soft')
     ensemble.fit(X_scaled, y)
 
@@ -128,7 +134,7 @@ def predict(df, model, scaler, symbol):
         return {
             "Symbol": symbol,
             "Signal": "NO MODEL ❌",
-            "Prob BUY": "-",
+            "Prob": "-",
             "RSI": "-",
             "Confidence": "Low",
             "Price x100": "-",
@@ -137,20 +143,23 @@ def predict(df, model, scaler, symbol):
 
     X_pred = df[features].iloc[[-2]]
     X_scaled = scaler.transform(X_pred)
-    proba = model.predict_proba(X_scaled)[0]
+    probas = model.predict_proba(X_scaled)[0]
+    class_idx = np.argmax(probas)
+    class_map = {0: "HOLD ❌", 1: "BUY 📈", 2: "SELL 🔻"}
+    label_map = {-1: 2, 0: 0, 1: 1}
 
-    signal = "BUY 📈" if proba[1] > 0.5 else "SELL 🔻"
-    confidence = "✅ High" if proba[1] >= 0.6 else "⚠️ Low"
-    target = df.iloc[-2]['target']
-    predicted = 1 if proba[1] > 0.5 else 0
-    correct = "✅" if predicted == target else "❌"
+    # Match predicted class with actual label
+    predicted = class_idx
+    actual_label = df.iloc[-2]['target']
+    actual_class = label_map.get(actual_label, 0)
+    correct = "✅" if predicted == actual_class else "❌"
 
     return {
         "Symbol": symbol,
-        "Signal": signal,
-        "Prob BUY": round(proba[1], 2),
+        "Signal": class_map[predicted],
+        "Prob": round(probas[predicted], 2),
         "RSI": round(df.iloc[-2]['rsi14'], 1),
-        "Confidence": confidence,
+        "Confidence": "✅ High" if probas[predicted] >= 0.6 else "⚠️ Low",
         "Price x100": round(df.iloc[-2]['close'] * MULTIPLIER, 2),
         "Correct": correct
     }
