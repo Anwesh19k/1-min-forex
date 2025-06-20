@@ -1,11 +1,9 @@
-torch==2.1.0+cpu
--f https://download.pytorch.org/whl/torch_stable.html
-
-stable-baselines3==2.1.0
-gymnasium==1.1.0
-ta
 streamlit
+gymnasium==1.1.1
+stable-baselines3==2.1.0
 scikit-learn
 pandas
 numpy
 requests
+ta
+torch==2.2.1  # ✅ Official version available on PyPI
