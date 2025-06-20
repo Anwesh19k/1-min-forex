@@ -4,7 +4,7 @@ import requests
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
-API_KEYS =[
+API_KEYS = [
     '54a7479bdf2040d3a35d6b3ae6457f9d',
     'd162b35754ca4c54a13ebe7abecab4e0',
     'a7266b2503fd497496d47527a7e63b5d',
@@ -12,7 +12,8 @@ API_KEYS =[
     '09c09d58ed5e4cf4afd9a9cac8e09b5d',
     'df00920c02c54a59a426948a47095543'
 ]
-SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP','XAU/USD',"BTC/USD"]
+
+SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP', 'XAU/USD', "BTC/USD"]
 api_index = 0
 
 def get_next_api_key():
@@ -62,8 +63,8 @@ def add_features(df):
 def train_model(df):
     features = ['ma5', 'ema10', 'rsi14', 'momentum']
     X = df[features]
-    y = df['future_label']
-    if len(X) < 20:
+    y = df['future_label'].map({-1: 0, 0: 1, 1: 2})  # Map to [0, 1, 2]
+    if len(X) < 20 or y.nunique() < 2:
         return None, None
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
@@ -74,7 +75,7 @@ def train_model(df):
     return model, scaler
 
 def fallback_signal(df):
-    rsi = df['rsi14'].iloc[-2]
+    rsi = df['rsi14'].iloc[-2] if 'rsi14' in df and len(df) >= 2 else 50
     if rsi > 55:
         return {"Signal": "BUY 📈", "Confidence": 0.52, "Correct": "⚠️"}
     elif rsi < 45:
@@ -89,8 +90,9 @@ def predict(df, model, scaler):
         X_scaled = scaler.transform(X_pred)
         probs = model.predict_proba(X_scaled)[0]
         predicted_class = np.argmax(probs)
-        class_map = {0: "HOLD ❌", 1: "BUY 📈", 2: "SELL 🔻"}
-        true_class = {-1: 2, 0: 0, 1: 1}.get(df.iloc[-2]['future_label'], 0)
+        class_map = {0: "SELL 🔻", 1: "HOLD ❌", 2: "BUY 📈"}
+        original_label = df.iloc[-2]['future_label']
+        true_class = {-1: 0, 0: 1, 1: 2}.get(original_label, 1)
         correct = "✅" if predicted_class == true_class else "❌"
         return {
             "Signal": class_map[predicted_class],
@@ -105,11 +107,16 @@ def run_signal_engine():
     for symbol in SYMBOLS:
         df = fetch_data(symbol)
         if df.empty or len(df) < 60:
+            results.append({"Symbol": symbol, **fallback_signal(df)})
             continue
         df = add_features(df)
         if df.empty:
+            results.append({"Symbol": symbol, **fallback_signal(df)})
             continue
         model, scaler = train_model(df)
+        if model is None:
+            results.append({"Symbol": symbol, **fallback_signal(df)})
+            continue
         result = predict(df, model, scaler)
         result["Symbol"] = symbol
         results.append(result)
