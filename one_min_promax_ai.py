@@ -7,6 +7,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import VotingClassifier
 from xgboost import XGBClassifier
 from catboost import CatBoostClassifier
+import streamlit as st
 
 # === CONFIG ===
 API_KEYS = [
@@ -86,7 +87,7 @@ def add_features(df):
     df['close_shift1'] = df['close'].shift(1)
     df['close_shift2'] = df['close'].shift(2)
     df['return'] = df['close'].shift(-2) / df['close'] - 1
-    df['target'] = np.where(df['return'] > 0.0015, 1, 0)
+    df['target'] = np.where(df['return'] > 0.0008, 1, 0)  # Lowered threshold for more signals
     return df.dropna()
 
 def train_ensemble(df):
@@ -95,10 +96,12 @@ def train_ensemble(df):
                 'close_shift1', 'close_shift2']
     df_1 = df[df['target'] == 1]
     df_0 = df[df['target'] == 0]
-    min_len = min(len(df_1), len(df_0))
 
-    if min_len < 10:
-        print("⚠️ Skipping training due to insufficient data.")
+    print(f"🔍 Class balance - Positive: {len(df_1)}, Negative: {len(df_0)}")
+
+    min_len = min(len(df_1), len(df_0))
+    if min_len < 5:
+        print("⚠️ Skipping training due to insufficient balanced samples.")
         return None, None
 
     df_bal = pd.concat([
@@ -175,7 +178,7 @@ def run_signal_engine():
     wins, total = 0, 0
 
     for symbol in SYMBOLS:
-        print(f"📊 Analyzing {symbol}...")
+        print(f"\n📊 Analyzing {symbol}...")
         df = fetch_data(symbol)
         if df.empty or len(df) < 60:
             continue
@@ -183,17 +186,17 @@ def run_signal_engine():
         model, scaler = train_ensemble(df)
         result = predict(df, model, scaler, symbol)
 
-        if result['Correct'] != "-" and result['Correct'] != "NO MODEL ❌":
+        if result['Correct'] == "✅":
+            wins += 1
             total += 1
-            if result['Correct'] == "✅":
-                wins += 1
+        elif result['Correct'] == "❌":
+            total += 1
 
         results.append(result)
 
-    print(f"\n🎯 Win Accuracy: {wins}/{total} = {round((wins/total)*100, 2)}%" if total > 0 else "No trades taken.")
+    print(f"\n🎯 Win Accuracy: {wins}/{total} = {round((wins / total) * 100, 2)}%" if total > 0 else "No trades taken.")
     return pd.DataFrame(results)
 
-# Optional: For Streamlit dashboard integration
-import streamlit as st
+# ✅ Streamlit entry point
 if 'df_pro_max' not in st.session_state:
     st.session_state['df_pro_max'] = run_signal_engine()
