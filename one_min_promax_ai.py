@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import requests
 from datetime import datetime
-from sklearn.utils import resample
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import VotingClassifier
 from xgboost import XGBClassifier
@@ -18,7 +17,7 @@ API_KEYS = [
     'df00920c02c54a59a426948a47095543'
 ]
 INTERVAL = '1min'
-SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'AUD/CAD', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP']
+SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'AUD/CAD', 'AUD/USD', 'USD/CAD', 'EUR/GBP']
 MULTIPLIER = 100
 api_index = 0
 
@@ -87,27 +86,22 @@ def add_features(df):
     df['close_shift1'] = df['close'].shift(1)
     df['close_shift2'] = df['close'].shift(2)
     df['return'] = df['close'].shift(-2) / df['close'] - 1
-    df['target'] = np.where(df['return'] > 0.0008, 1, 0)  # Lowered threshold for more signals
+    df['target'] = np.where(df['return'] > 0.0004, 1, 0)  # Lowered for more positive samples
     return df.dropna()
 
-def train_ensemble(df):
+def train_ensemble(df, symbol):
     features = ['ma5', 'ma10', 'ema10', 'rsi14', 'momentum', 'macd', 'adx',
                 'bb_upper', 'bb_lower', 'volatility', 'open_close', 'high_low',
                 'close_shift1', 'close_shift2']
     df_1 = df[df['target'] == 1]
     df_0 = df[df['target'] == 0]
 
-    print(f"🔍 Class balance - Positive: {len(df_1)}, Negative: {len(df_0)}")
-
-    min_len = min(len(df_1), len(df_0))
-    if min_len < 5:
-        print("⚠️ Skipping training due to insufficient balanced samples.")
+    print(f"🔍 {symbol} → Positive: {len(df_1)}, Negative: {len(df_0)}")
+    if len(df_1) < 5 or len(df_0) < 5:
+        print("⚠️ Skipping training due to insufficient samples.")
         return None, None
 
-    df_bal = pd.concat([
-        resample(df_1, n_samples=min_len, replace=True, random_state=42),
-        resample(df_0, n_samples=min_len, replace=True, random_state=42)
-    ]).sample(frac=1).reset_index(drop=True)
+    df_bal = pd.concat([df_1, df_0]).sample(frac=1).reset_index(drop=True)
 
     X = df_bal[features]
     y = df_bal['target']
@@ -183,7 +177,7 @@ def run_signal_engine():
         if df.empty or len(df) < 60:
             continue
         df = add_features(df)
-        model, scaler = train_ensemble(df)
+        model, scaler = train_ensemble(df, symbol)
         result = predict(df, model, scaler, symbol)
 
         if result['Correct'] == "✅":
@@ -197,6 +191,7 @@ def run_signal_engine():
     print(f"\n🎯 Win Accuracy: {wins}/{total} = {round((wins / total) * 100, 2)}%" if total > 0 else "No trades taken.")
     return pd.DataFrame(results)
 
-# ✅ Streamlit entry point
+# ✅ For Streamlit
 if 'df_pro_max' not in st.session_state:
     st.session_state['df_pro_max'] = run_signal_engine()
+
