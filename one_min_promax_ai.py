@@ -17,7 +17,7 @@ API_KEYS = [
     'df00920c02c54a59a426948a47095543'
 ]
 INTERVAL = '1min'
-SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'AUD/CAD', 'AUD/USD', 'USD/CAD', 'EUR/GBP']
+SYMBOLS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'AUD/CAD', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP']
 MULTIPLIER = 100
 api_index = 0
 
@@ -70,7 +70,7 @@ def compute_adx(df, period=14):
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-6)) * 100
     return pd.Series(dx).rolling(window=period).mean()
 
-def add_features(df):
+def add_features(df, symbol):
     df['ma5'] = df['close'].rolling(5).mean()
     df['ma10'] = df['close'].rolling(10).mean()
     df['ema10'] = df['close'].ewm(span=10).mean()
@@ -86,7 +86,9 @@ def add_features(df):
     df['close_shift1'] = df['close'].shift(1)
     df['close_shift2'] = df['close'].shift(2)
     df['return'] = df['close'].shift(-2) / df['close'] - 1
-    df['target'] = np.where(df['return'] > 0.0004, 1, 0)  # Lowered for more positive samples
+    df['target'] = np.where(df['return'] > 0.0002, 1, 0)
+    print(f"🔎 {symbol} - Return stats:\n{df['return'].describe()}")
+    print(f"📊 {symbol} - Target=1 count: {df['target'].sum()} out of {len(df)}")
     return df.dropna()
 
 def train_ensemble(df, symbol):
@@ -96,20 +98,16 @@ def train_ensemble(df, symbol):
     df_1 = df[df['target'] == 1]
     df_0 = df[df['target'] == 0]
 
-    print(f"🔍 {symbol} → Positive: {len(df_1)}, Negative: {len(df_0)}")
-    if len(df_1) < 5 or len(df_0) < 5:
-        print("⚠️ Skipping training due to insufficient samples.")
+    if len(df_1) == 0 or len(df_0) == 0:
+        print(f"⚠️ {symbol} - Cannot train: only one class present.")
         return None, None
 
     df_bal = pd.concat([df_1, df_0]).sample(frac=1).reset_index(drop=True)
-
     X = df_bal[features]
     y = df_bal['target']
 
-    if X.isnull().values.any() or np.isinf(X.values).any():
-        print("❌ Found NaN or Inf in features. Cleaning...")
-        X = X.replace([np.inf, -np.inf], np.nan).dropna()
-        y = y.loc[X.index]
+    X = X.replace([np.inf, -np.inf], np.nan).dropna()
+    y = y.loc[X.index]
 
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
@@ -141,7 +139,7 @@ def predict(df, model, scaler, symbol):
     X_scaled = scaler.transform(X_pred)
     proba = model.predict_proba(X_scaled)[0]
 
-    if proba[1] < 0.8:
+    if proba[1] < 0.6:
         return {
             "Symbol": symbol,
             "Signal": "NO TRADE ❌",
@@ -172,11 +170,11 @@ def run_signal_engine():
     wins, total = 0, 0
 
     for symbol in SYMBOLS:
-        print(f"\n📊 Analyzing {symbol}...")
+        print(f"\n🔍 Analyzing {symbol}...")
         df = fetch_data(symbol)
         if df.empty or len(df) < 60:
             continue
-        df = add_features(df)
+        df = add_features(df, symbol)
         model, scaler = train_ensemble(df, symbol)
         result = predict(df, model, scaler, symbol)
 
@@ -188,10 +186,11 @@ def run_signal_engine():
 
         results.append(result)
 
-    print(f"\n🎯 Win Accuracy: {wins}/{total} = {round((wins / total) * 100, 2)}%" if total > 0 else "No trades taken.")
+    print(f"\n🎯 Final Accuracy: {wins}/{total} = {round((wins / total) * 100, 2)}%" if total > 0 else "No trades taken.")
     return pd.DataFrame(results)
 
-# ✅ For Streamlit
+# ✅ Streamlit Integration
 if 'df_pro_max' not in st.session_state:
     st.session_state['df_pro_max'] = run_signal_engine()
+
 
