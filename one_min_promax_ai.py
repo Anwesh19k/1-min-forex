@@ -42,15 +42,11 @@ def add_features(df):
     df['rsi14'] = compute_rsi(df['close'])
     df['momentum'] = df['close'] - df['close'].shift(4)
     df['return'] = df['close'].shift(-2) / df['close'] - 1
-
-    # Assign label
     df['target'] = np.select(
         [df['return'] > 0.0002, df['return'] < -0.0002],
         [1, -1],
         default=0
     )
-
-    # Predict 2 candles before actual result
     df['future_label'] = df['target'].shift(-2)
     df = df.dropna()
     df = df[df['future_label'].isin([-1, 0, 1])]
@@ -73,7 +69,8 @@ def train_model(df):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     model = XGBClassifier(objective='multi:softprob', num_class=3,
-                          n_estimators=60, max_depth=3, learning_rate=0.07, use_label_encoder=False, eval_metric='mlogloss')
+                          n_estimators=60, max_depth=3, learning_rate=0.07,
+                          use_label_encoder=False, eval_metric='mlogloss')
     model.fit(X_scaled, y)
     return model, scaler
 
@@ -84,7 +81,7 @@ def predict(df, model, scaler):
     probs = model.predict_proba(X_scaled)[0]
     predicted_class = np.argmax(probs)
     class_map = {0: "HOLD ❌", 1: "BUY 📈", 2: "SELL 🔻"}
-    true_class = { -1: 2, 0: 0, 1: 1 }.get(df.iloc[-2]['future_label'], 0)
+    true_class = {-1: 2, 0: 0, 1: 1}.get(df.iloc[-2]['future_label'], 0)
     correct = "✅" if predicted_class == true_class else "❌"
     return {
         "Signal": class_map[predicted_class],
@@ -92,12 +89,15 @@ def predict(df, model, scaler):
         "Correct": correct
     }
 
-# ✅ Run for multiple symbols
-for symbol in SYMBOLS:
-    df = fetch_data(symbol)
-    if df.empty: continue
-    df = add_features(df)
-    if df['future_label'].nunique() < 2: continue
-    model, scaler = train_model(df)
-    signal = predict(df, model, scaler)
-    print(f"{symbol}: {signal}")
+def run_signal_engine():
+    results = []
+    for symbol in SYMBOLS:
+        df = fetch_data(symbol)
+        if df.empty: continue
+        df = add_features(df)
+        if df['future_label'].nunique() < 2: continue
+        model, scaler = train_model(df)
+        signal = predict(df, model, scaler)
+        signal['Symbol'] = symbol
+        results.append(signal)
+    return pd.DataFrame(results)
