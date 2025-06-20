@@ -6,4 +6,4 @@ ta
 gymnasium
 stable-baselines3
 scikit-learn
-torch==2.2.1             
+torch           
