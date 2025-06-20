@@ -1,11 +1,11 @@
+torch==2.1.0+cpu
+-f https://download.pytorch.org/whl/torch_stable.html
+
+stable-baselines3==2.1.0
+gymnasium==1.1.0
+ta
+streamlit
+scikit-learn
 pandas
 numpy
 requests
-xgboost
-lightgbm
-catboost
-shap
-scikit-learn
-streamlit
-gymnasium
-stable-baselines3
